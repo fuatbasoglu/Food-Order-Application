@@ -1,0 +1,1018 @@
+# Yemek Siparişi Uygulaması
+# Bu uygulama Windows için PyQt ile açılacak bir masaüstü uygulamasıdır.
+# Uygulamada restoran sahibi ve müşteri olmak üzere iki kullanıcı tipi vardır.
+# Sipariş verme, sipariş iptal etme ve bakiye görüntüleme gibi fonksiyonlar vardır.
+# Uygulamanın destekleyeceği para birimi sadece uygulamanın içerisinde geçerli olan "YemekCoin"dir.
+# Uygulamanın içinde çeşitli restoranlar ve yemekler vardır.
+
+# PyQt5 kütüphanesini içe aktarma
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QPushButton, QComboBox, QTableWidget, QTableWidgetItem
+from PyQt5.QtCore import Qt
+import sys # sys modülünü import et
+
+
+# Veritabanı işlemleri için sqlite3 kütüphanesini içe aktarma
+import sqlite3
+
+# Veritabanı bağlantısı oluşturma
+conn = sqlite3.connect("yemeksiparisi.db")
+
+# Veritabanı imlecini oluşturma
+cur = conn.cursor()
+
+# Veritabanında tablolar oluşturma (sadece ilk defa çalıştırılırken)
+cur.execute("""CREATE TABLE IF NOT EXISTS restoranlar (
+    id INTEGER PRIMARY KEY,
+    ad TEXT,
+    adres TEXT,
+    telefon TEXT,
+    email TEXT,
+    sifre TEXT,
+    bakiye INTEGER
+)""")
+
+cur.execute("""CREATE TABLE IF NOT EXISTS musteriler (
+    id INTEGER PRIMARY KEY,
+    ad TEXT,
+    soyad TEXT,
+    telefon TEXT,
+    email TEXT,
+    sifre TEXT,
+    bakiye INTEGER
+)""")
+
+cur.execute("""CREATE TABLE IF NOT EXISTS yemekler (
+    id INTEGER PRIMARY KEY,
+    restoran_id INTEGER,
+    ad TEXT,
+    fiyat INTEGER,
+    FOREIGN KEY (restoran_id) REFERENCES restoranlar (id)
+)""")
+
+cur.execute("""CREATE TABLE IF NOT EXISTS siparisler (
+    id INTEGER PRIMARY KEY,
+    musteri_id INTEGER,
+    restoran_id INTEGER,
+    yemek_id INTEGER,
+    durum TEXT,
+    FOREIGN KEY (musteri_id) REFERENCES musteriler (id),
+    FOREIGN KEY (restoran_id) REFERENCES restoranlar (id),
+    FOREIGN KEY (yemek_id) REFERENCES yemekler (id)
+)""")
+
+# Veritabanında örnek veriler oluşturma (sadece ilk defa çalıştırılırken)
+cur.execute("""INSERT INTO restoranlar (ad, adres, telefon, email, sifre, bakiye) VALUES
+    ('Kebapçı Ali', 'Esenyurt Mahallesi, 123. Sokak, No: 4', '0212 123 45 67', 'ali@kebap.com', '1234', 1000),
+    ('Pizza House', 'Bahçeşehir Mahallesi, 456. Sokak, No: 8', '0212 456 78 90', 'pizza@house.com', '5678', 1000),
+    ('Sushi Bar', 'Beylikdüzü Mahallesi, 789. Sokak, No: 12', '0212 789 01 23', 'sushi@bar.com', '9012', 1000)
+""")
+
+cur.execute("""INSERT INTO musteriler (ad, soyad, telefon, email, sifre, bakiye) VALUES
+    ('Ahmet', 'Yılmaz', '0532 123 45 67', 'ahmet@yilmaz.com', '1234', 100),
+    ('Ayşe', 'Demir', '0532 456 78 90', 'ayse@demir.com', '5678', 100),
+    ('Mehmet', 'Çelik', '0532 789 01 23', 'mehmet@celik.com', '9012', 100)
+""")
+
+cur.execute("""INSERT INTO yemekler (restoran_id, ad, fiyat) VALUES
+    (1, 'Adana Kebap', 25),
+    (1, 'Urfa Kebap', 25),
+    (1, 'Beyti Kebap', 30),
+    (1, 'İskender Kebap', 35),
+    (2, 'Margarita Pizza', 20),
+    (2, 'Sucuklu Pizza', 25),
+    (2, 'Karışık Pizza', 30),
+    (2, 'Bol Malzemos Pizza', 35),
+    (3, 'Nigiri Sushi', 15),
+    (3, 'Maki Sushi', 20),
+    (3, 'Sashimi Sushi', 25),
+    (3, 'Dragon Sushi', 30)
+""")
+
+# Veritabanı değişikliklerini kaydetme
+conn.commit()
+
+# Restoran sahibi sınıfı tanımlama
+class RestoranSahibi:
+    
+    # Restoran sahibi nesnesi oluşturma
+    def __init__(self, id):
+        self.id = id # Restoran sahibinin id'si
+        self.ad = None # Restoran sahibinin adı
+        self.adres = None # Restoran sahibinin adresi
+        self.telefon = None # Restoran sahibinin telefonu
+        self.email = None # Restoran sahibinin email'i
+        self.sifre = None # Restoran sahibinin şifresi
+        self.bakiye = None # Restoran sahibinin bakiyesi
+        self.yemekler = [] # Restoran sahibinin yemekleri
+        self.siparisler = [] # Restoran sahibinin siparişleri
+    
+    # Restoran sahibinin bilgilerini veritabanından çekme
+    def bilgileri_cek(self):
+        cur.execute("SELECT * FROM restoranlar WHERE id = ?", (self.id,))
+        row = cur.fetchone()
+        if row:
+            self.ad = row[1]
+            self.adres = row[2]
+            self.telefon = row[3]
+            self.email = row[4]
+            self.sifre = row[5]
+            self.bakiye = row[6]
+    
+    # Restoran sahibinin yemeklerini veritabanından çekme
+    def yemekleri_cek(self):
+        cur.execute("SELECT * FROM yemekler WHERE restoran_id = ?", (self.id,))
+        rows = cur.fetchall()
+        if rows:
+            self.yemekler.clear()
+            for row in rows:
+                yemek = {"id": row[0], "ad": row[2], "fiyat": row[3]}
+                self.yemekler.append(yemek)
+    
+    # Restoran sahibinin siparişlerini veritabanından çekme
+    def siparisleri_cek(self):
+        cur.execute("SELECT * FROM siparisler WHERE restoran_id = ?", (self.id,))
+        rows = cur.fetchall()
+        if rows:
+            self.siparisler.clear()
+            for row in rows:
+                siparis = {"id": row[0], "musteri_id": row[1], "yemek_id": row[3], "durum": row[4]}
+                self.siparisler.append(siparis)
+    
+    # Restoran sahibinin yemek eklemesini sağlayan fonksiyon
+    def yemek_ekle(self, ad, fiyat):
+        cur.execute("INSERT INTO yemekler (restoran_id, ad, fiyat) VALUES (?, ?, ?)", (self.id, ad, fiyat))
+        conn.commit()
+    
+    # Restoran sahibinin yemek silmesini sağlayan fonksiyon
+    def yemek_sil(self, id):
+        cur.execute("DELETE FROM yemekler WHERE id = ?", (id,))
+        conn.commit()
+    
+        # Restoran sahibinin sipariş durumunu güncellemesini sağlayan fonksiyon
+    def siparis_guncelle(self, id, durum):
+        cur.execute("UPDATE siparisler SET durum = ? WHERE id = ?", (durum, id))
+        conn.commit()
+    
+    # Restoran sahibinin bakiyesini arttırmasını veya azaltmasını sağlayan fonksiyon
+    def bakiye_degistir(self, miktar):
+        self.bakiye += miktar
+        cur.execute("UPDATE restoranlar SET bakiye = ? WHERE id = ?", (self.bakiye, self.id))
+        conn.commit()
+
+# Müşteri sınıfı tanımlama
+class Musteri:
+    
+    # Müşteri nesnesi oluşturma
+    def __init__(self, id):
+        self.id = id # Müşterinin id'si
+        self.ad = None # Müşterinin adı
+        self.soyad = None # Müşterinin soyadı
+        self.telefon = None # Müşterinin telefonu
+        self.email = None # Müşterinin email'i
+        self.sifre = None # Müşterinin şifresi
+        self.bakiye = None # Müşterinin bakiyesi
+        self.siparisler = [] # Müşterinin siparişleri
+    
+    # Müşterinin bilgilerini veritabanından çekme
+    def bilgileri_cek(self):
+        cur.execute("SELECT * FROM musteriler WHERE id = ?", (self.id,))
+        row = cur.fetchone()
+        if row:
+            self.ad = row[1]
+            self.soyad = row[2]
+            self.telefon = row[3]
+            self.email = row[4]
+            self.sifre = row[5]
+            self.bakiye = row[6]
+    
+    # Müşterinin siparişlerini veritabanından çekme
+    def siparisleri_cek(self):
+        cur.execute("SELECT * FROM siparisler WHERE musteri_id = ?", (self.id,))
+        rows = cur.fetchall()
+        if rows:
+            self.siparisler.clear()
+            for row in rows:
+                siparis = {"id": row[0], "restoran_id": row[2], "yemek_id": row[3], "durum": row[4]}
+                self.siparisler.append(siparis)
+    
+    # Müşterinin sipariş vermesini sağlayan fonksiyon
+    def siparis_ver(self, restoran_id, yemek_id):
+        cur.execute("INSERT INTO siparisler (musteri_id, restoran_id, yemek_id, durum) VALUES (?, ?, ?, ?)", (self.id, restoran_id, yemek_id, "Bekliyor"))
+        conn.commit()
+    
+    # Müşterinin sipariş iptal etmesini sağlayan fonksiyon
+    def siparis_iptal(self, id):
+        cur.execute("DELETE FROM siparisler WHERE id = ?", (id,))
+        conn.commit()
+    
+    # Müşterinin bakiyesini arttırmasını veya azaltmasını sağlayan fonksiyon
+    def bakiye_degistir(self, miktar):
+        self.bakiye += miktar
+        cur.execute("UPDATE musteriler SET bakiye = ? WHERE id = ?", (self.bakiye, self.id))
+        conn.commit()
+
+# Giriş ekranı sınıfı tanımlama
+class GirisEkrani(QWidget):
+    
+    # Giriş ekranı nesnesi oluşturma
+    def __init__(self):
+        super().__init__()
+        
+        # Giriş ekranının başlığını ve boyutunu ayarlama
+        self.setWindowTitle("Yemek Siparişi Uygulaması")
+        self.resize(400, 300)
+        
+        # Giriş ekranındaki arayüz elemanlarını oluşturma ve yerleştirme
+        self.label_kullanici_tipi = QLabel("Kullanıcı Tipi:", self)
+        self.label_kullanici_tipi.move(50, 50)
+        
+        self.combo_kullanici_tipi = QComboBox(self)
+        self.combo_kullanici_tipi.addItems(["Restoran Sahibi", "Müşteri"])
+        self.combo_kullanici_tipi.move(150, 50)
+        
+        self.label_email = QLabel("Email:", self)
+        self.label_email.move(50, 100)
+        
+        self.edit_email = QLineEdit(self)
+        self.edit_email.move(150, 100)
+        
+        self.label_sifre = QLabel("Şifre:", self)
+        self.label_sifre.move(50, 150)
+        
+        self.edit_sifre = QLineEdit(self)
+        self.edit_sifre.setEchoMode(QLineEdit.Password)
+        self.edit_sifre.move(150, 150)
+        
+        self.button_giris = QPushButton("Giriş Yap", self)
+        self.button_giris.move(150, 200)
+        self.button_giris.clicked.connect(self.giris_yap) # Giriş yap butonuna tıklandığında giris_yap fonksiyonunu çağır
+        
+        self.button_kayit = QPushButton("Kayıt Ol", self)
+        self.button_kayit.move(250, 200)
+        self.button_kayit.clicked.connect(self.kayit_ol) # Kayıt ol butonuna tıklandığında kayit_ol fonksiyonunu çağır
+        
+    # Giriş yap fonksiyonu tanımlama
+    def giris_yap(self):
+        
+        # Kullanıcı tipini, email'i ve şifreyi al
+        kullanici_tipi = self.combo_kullanici_tipi.currentText()
+        email = self.edit_email.text()
+        sifre = self.edit_sifre.text()
+        
+        # Kullanıcı tipine göre veritabanında sorgu yap
+        if kullanici_tipi == "Restoran Sahibi":
+            cur.execute("SELECT id FROM restoranlar WHERE email = ? AND sifre = ?", (email, sifre))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                restoran_id = row[0] # Restoran id'sini al
+                restoran_sahibi = RestoranSahibi(restoran_id) # Restoran sahibi nesnesi oluştur
+                restoran_sahibi.bilgileri_cek() # Restoran sahibinin bilgilerini çek
+                restoran_sahibi.yemekleri_cek() # Restoran sahibinin yemeklerini çek
+                restoran_sahibi.siparisleri_cek() # Restoran sahibinin siparişlerini çek
+                restoran_sahibi_ekrani = RestoranSahibiEkrani(restoran_sahibi) # Restoran sahibi ekranı nesnesi oluştur
+                restoran_sahibi_ekrani.show() # Restoran sahibi ekranını göster
+                self.close() # Giriş ekranını kapat
+            else: # Eğer sorgu sonucu yoksa
+                hata_labeli = QLabel("Hatalı email veya şifre!", self) # Hata labeli oluştur
+                hata_labeli.move(150, 250) # Hata labelini yerleştir
+                hata_labeli.show() # Hata labelini göster
+        
+        elif kullanici_tipi == "Müşteri":
+            cur.execute("SELECT id FROM musteriler WHERE email = ? AND sifre = ?", (email, sifre))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                musteri_id = row[0] # Müşteri id'sini al
+                musteri = Musteri(musteri_id) # Müşteri nesnesi oluştur
+                musteri.bilgileri_cek() # Müşterinin bilgilerini çek
+                musteri.siparisleri_cek() # Müşterinin siparişlerini çek
+                musteri_ekrani = MusteriEkrani(musteri) # Müşteri ekranı nesnesi oluştur
+                musteri_ekrani.show() # Müşteri ekranını göster
+                self.close() # Giriş ekranını kapat
+            else: # Eğer sorgu sonucu yoksa
+                hata_labeli = QLabel("Hatalı email veya şifre!", self) # Hata labeli oluştur
+                hata_labeli.move(150, 250) # Hata labelini yerleştir
+                hata_labeli.show() # Hata labelini göster
+    
+        # Kayıt ol fonksiyonu tanımlama
+    def kayit_ol(self):
+        
+        # Kullanıcı tipini, email'i ve şifreyi al
+        kullanici_tipi = self.combo_kullanici_tipi.currentText()
+        email = self.edit_email.text()
+        sifre = self.edit_sifre.text()
+        
+        # Kullanıcı tipine göre veritabanında sorgu yap
+        if kullanici_tipi == "Restoran Sahibi":
+            cur.execute("SELECT id FROM restoranlar WHERE email = ?", (email,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                hata_labeli = QLabel("Bu email zaten kayıtlı!", self) # Hata labeli oluştur
+                hata_labeli.move(150, 250) # Hata labelini yerleştir
+                hata_labeli.show() # Hata labelini göster
+            else: # Eğer sorgu sonucu yoksa
+                kayit_ekrani = KayitEkrani(kullanici_tipi, email, sifre) # Kayıt ekranı nesnesi oluştur
+                kayit_ekrani.show() # Kayıt ekranını göster
+                self.close() # Giriş ekranını kapat
+        
+        elif kullanici_tipi == "Müşteri":
+            cur.execute("SELECT id FROM musteriler WHERE email = ?", (email,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                hata_labeli = QLabel("Bu email zaten kayıtlı!", self) # Hata labeli oluştur
+                hata_labeli.move(150, 250) # Hata labelini yerleştir
+                hata_labeli.show() # Hata labelini göster
+            else: # Eğer sorgu sonucu yoksa
+                kayit_ekrani = KayitEkrani(kullanici_tipi, email, sifre) # Kayıt ekranı nesnesi oluştur
+                kayit_ekrani.show() # Kayıt ekranını göster
+                self.close() # Giriş ekranını kapat
+
+# Kayıt ekranı sınıfı tanımlama
+class KayitEkrani(QWidget):
+    
+    # Kayıt ekranı nesnesi oluşturma
+    def __init__(self, kullanici_tipi, email, sifre):
+        super().__init__()
+        
+        # Kayıt ekranının başlığını ve boyutunu ayarlama
+        self.setWindowTitle("Yemek Siparişi Uygulaması")
+        self.resize(400, 300)
+        
+        # Kayıt ekranındaki arayüz elemanlarını oluşturma ve yerleştirme
+        self.label_kullanici_tipi = QLabel("Kullanıcı Tipi:", self)
+        self.label_kullanici_tipi.move(50, 50)
+        
+        self.combo_kullanici_tipi = QComboBox(self)
+        self.combo_kullanici_tipi.addItems(["Restoran Sahibi", "Müşteri"])
+        self.combo_kullanici_tipi.setCurrentText(kullanici_tipi)
+        self.combo_kullanici_tipi.move(150, 50)
+        
+        self.label_email = QLabel("Email:", self)
+        self.label_email.move(50, 100)
+        
+        self.edit_email = QLineEdit(self)
+        self.edit_email.setText(email)
+        self.edit_email.move(150, 100)
+        
+        self.label_sifre = QLabel("Şifre:", self)
+        self.label_sifre.move(50, 150)
+        
+        self.edit_sifre = QLineEdit(self)
+        self.edit_sifre.setText(sifre)
+        self.edit_sifre.setEchoMode(QLineEdit.Password)
+        self.edit_sifre.move(150, 150)
+        
+        self.button_kayit = QPushButton("Kayıt Ol", self)
+        self.button_kayit.move(150, 200)
+        self.button_kayit.clicked.connect(self.kayit_ol) # Kayıt ol butonuna tıklandığında kayit_ol fonksiyonunu çağır
+    
+    # Kayıt ol fonksiyonu tanımlama
+    def kayit_ol(self):
+        
+        # Kullanıcı tipini, email'i ve şifreyi al
+        kullanici_tipi = self.combo_kullanici_tipi.currentText()
+        email = self.edit_email.text()
+        sifre = self.edit_sifre.text()
+        
+        # Kullanıcı tipine göre veritabanına kayıt ekle
+        if kullanici_tipi == "Restoran Sahibi":
+            cur.execute("INSERT INTO restoranlar (ad, adres, telefon, email, sifre, bakiye) VALUES (?, ?, ?, ?, ?, ?)", ("", "", "", email, sifre, 1000))
+            conn.commit()
+            restoran_id = cur.lastrowid # Restoran id'sini al
+            restoran_sahibi = RestoranSahibi(restoran_id) # Restoran sahibi nesnesi oluştur
+            restoran_sahibi.bilgileri_cek() # Restoran sahibinin bilgilerini çek
+            restoran_sahibi.yemekleri_cek() # Restoran sahibinin yemeklerini çek
+            restoran_sahibi.siparisleri_cek() # Restoran sahibinin siparişlerini çek
+            restoran_sahibi_ekrani = RestoranSahibiEkrani(restoran_sahibi) # Restoran sahibi ekranı nesnesi oluştur
+            restoran_sahibi_ekrani.show() # Restoran sahibi ekranını göster
+            self.close() # Kayıt ekranını kapat
+        
+        elif kullanici_tipi == "Müşteri":
+            cur.execute("INSERT INTO musteriler (ad, soyad, telefon, email, sifre, bakiye) VALUES (?, ?, ?, ?, ?, ?)", ("", "", "", email, sifre, 100))
+            conn.commit()
+            musteri_id = cur.lastrowid # Müşteri id'sini al
+            musteri = Musteri(musteri_id) # Müşteri nesnesi oluştur
+            musteri.bilgileri_cek() # Müşterinin bilgilerini çek
+            musteri.siparisleri_cek() # Müşterinin siparişlerini çek
+            musteri_ekrani = MusteriEkrani(musteri) # Müşteri ekranı nesnesi oluştur
+            musteri_ekrani.show() # Müşteri ekranını göster
+            self.close() # Kayıt ekranını kapat
+
+# Restoran sahibi ekranı sınıfı tanımlama
+class RestoranSahibiEkrani(QWidget):
+    
+    # Restoran sahibi ekranı nesnesi oluşturma
+    def __init__(self, restoran_sahibi):
+        super().__init__()
+        
+        # Restoran sahibinin bilgilerini al
+        self.restoran_sahibi = restoran_sahibi
+        
+        # Restoran sahibi ekranının başlığını ve boyutunu ayarlama
+        self.setWindowTitle("Yemek Siparişi Uygulaması")
+        self.resize(800, 600)
+        
+        # Restoran sahibi ekranındaki arayüz elemanlarını oluşturma ve yerleştirme
+        self.label_bilgilerim = QLabel("Bilgilerim", self)
+        self.label_bilgilerim.move(50, 50)
+        
+        self.label_ad = QLabel("Ad:", self)
+        self.label_ad.move(50, 100)
+        
+        self.edit_ad = QLineEdit(self)
+        self.edit_ad.setText(self.restoran_sahibi.ad)
+        self.edit_ad.move(150, 100)
+        
+        self.label_adres = QLabel("Adres:", self)
+        self.label_adres.move(50, 150)
+        
+        self.edit_adres = QLineEdit(self)
+        self.edit_adres.setText(self.restoran_sahibi.adres)
+        self.edit_adres.move(150, 150)
+        
+        self.label_telefon = QLabel("Telefon:", self)
+        self.label_telefon.move(50, 200)
+        
+        self.edit_telefon = QLineEdit(self)
+        self.edit_telefon.setText(self.restoran_sahibi.telefon)
+        self.edit_telefon.move(150, 200)
+        
+        self.label_email = QLabel("Email:", self)
+        self.label_email.move(50, 250)
+        
+        self.edit_email = QLineEdit(self)
+        self.edit_email.setText(self.restoran_sahibi.email)
+        self.edit_email.setReadOnly(True) # Email değiştirilemez
+        self.edit_email.move(150, 250)
+        
+        self.label_sifre = QLabel("Şifre:", self)
+        self.label_sifre.move(50, 300)
+        
+        self.edit_sifre = QLineEdit(self)
+        self.edit_sifre.setText(self.restoran_sahibi.sifre)
+        self.edit_sifre.setEchoMode(QLineEdit.Password)
+        self.edit_sifre.move(150, 300)
+        
+        self.label_bakiye = QLabel("Bakiye:", self)
+        self.label_bakiye.move(50, 350)
+        
+        self.edit_bakiye = QLineEdit(self)
+        self.edit_bakiye.setText(str(self.restoran_sahibi.bakiye) + " YemekCoin")
+        self.edit_bakiye.setReadOnly(True) # Bakiye değiştirilemez
+        self.edit_bakiye.move(150, 350)
+        
+        self.button_guncelle = QPushButton("Bilgilerimi Güncelle", self)
+        self.button_guncelle.move(150, 400)
+        self.button_guncelle.clicked.connect(self.bilgileri_guncelle) # Bilgilerimi güncelle butonuna tıklandığında bilgileri_guncelle fonksiyonunu çağır
+        
+        self.label_yemeklerim = QLabel("Yemeklerim", self)
+        self.label_yemeklerim.move(450, 50)
+        
+        self.table_yemekler = QTableWidget(self) # Yemekler tablosu oluştur
+        self.table_yemekler.setRowCount(len(self.restoran_sahibi.yemekler)) # Tablonun satır sayısını restoran sahibinin yemek sayısına eşitle
+        self.table_yemekler.setColumnCount(3) # Tablonun sütun sayısını 3 yap
+        self.table_yemekler.setHorizontalHeaderLabels(["Ad", "Fiyat", "Sil"]) # Tablonun sütun başlıklarını belirle
+        self.table_yemekler.verticalHeader().setVisible(False) # Tablonun satır başlıklarını gizle
+        self.table_yemekler.setEditTriggers(QTableWidget.NoEditTriggers) # Tablonun hücreleri düzenlenemez yap
+        for i in range(len(self.restoran_sahibi.yemekler)): # Restoran sahibinin yemekleri için döngü oluştur
+            yemek = self.restoran_sahibi.yemekler[i] # Yemeği al
+            ad = yemek["ad"] # Yemeğin adını al
+            fiyat = yemek["fiyat"] # Yemeğin fiyatını al
+            id = yemek["id"] # Yemeğin id'sini al
+            item_ad = QTableWidgetItem(ad) # Ad hücresi oluştur
+            item_fiyat = QTableWidgetItem(str(fiyat) + " YemekCoin") # Fiyat hücresi oluştur
+            button_sil = QPushButton("Sil") # Sil butonu oluştur
+            button_sil.clicked.connect(lambda checked, id=id: self.yemek_sil(id)) # Sil butonuna tıklandığında yemek_sil fonksiyonunu çağır (id parametresi ile)
+            item_ad.setTextAlignment(Qt.AlignCenter) # Ad hücresini ortala
+            item_fiyat.setTextAlignment(Qt.AlignCenter) # Fiyat hücresini ortala
+            button_sil.setStyleSheet("background-color: red; color: white") # Sil butonunun stilini ayarla
+            self.table_yemekler.setItem(i, 0, item_ad) # Ad hücresini tabloya ekle
+            self.table_yemekler.setItem(i, 1, item_fiyat) # Fiyat hücresini tabloya ekle
+            self.table_yemekler.setCellWidget(i, 2, button_sil) # Sil butonunu tabloya ekle
+        
+        self.table_yemekler.resizeColumnsToContents() # Tablonun sütun genişliklerini içeriğe göre ayarla
+        self.table_yemekler.move(450, 100)
+        
+        self.label_yeni_yemek = QLabel("Yeni Yemek Ekle", self)
+        self.label_yeni_yemek.move(450, 350)
+        
+        self.label_yeni_ad = QLabel("Ad:", self)
+        self.label_yeni_ad.move(450, 400)
+        
+        self.edit_yeni_ad = QLineEdit(self)
+        self.edit_yeni_ad.move(500, 400)
+        
+        self.label_yeni_fiyat = QLabel("Fiyat:", self)
+        self.label_yeni_fiyat.move(450, 450)
+        
+        self.edit_yeni_fiyat = QLineEdit(self)
+        self.edit_yeni_fiyat.move(500, 450)
+        
+        self.button_ekle = QPushButton("Ekle", self)
+        self.button_ekle.move(500, 500)
+        self.button_ekle.clicked.connect(self.yemek_ekle) # Ekle butonuna tıklandığında yemek_ekle fonksiyonunu çağır
+        
+        self.label_siparislerim = QLabel("Siparişlerim", self)
+        self.label_siparislerim.move(50, 450)
+        
+        self.table_siparisler = QTableWidget(self) # Siparişler tablosu oluştur
+        self.table_siparisler.setRowCount(len(self.restoran_sahibi.siparisler)) # Tablonun satır sayısını restoran sahibinin sipariş sayısına eşitle
+        self.table_siparisler.setColumnCount(4) # Tablonun sütun sayısını 4 yap
+        self.table_siparisler.setHorizontalHeaderLabels(["Müşteri", "Yemek", "Durum", "Güncelle"]) # Tablonun sütun başlıklarını belirle
+        self.table_siparisler.verticalHeader().setVisible(False) # Tablonun satır başlıklarını gizle
+        self.table_siparisler.setEditTriggers(QTableWidget.NoEditTriggers) # Tablonun hücreleri düzenlenemez yap
+        for i in range(len(self.restoran_sahibi.siparisler)): # Restoran sahibinin siparişleri için döngü oluştur
+            siparis = self.restoran_sahibi.siparisler[i] # Siparişi al
+            musteri_id = siparis["musteri_id"] # Siparişin müşteri id'sini al
+            yemek_id = siparis["yemek_id"] # Siparişin yemek id'sini al
+            durum = siparis["durum"] # Siparişin durumunu al
+            id = siparis["id"] # Siparişin id'sini al
+            cur.execute("SELECT ad, soyad FROM musteriler WHERE id = ?", (musteri_id,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                musteri_ad = row[0] # Müşterinin adını al
+                musteri_soyad = row[1] # Müşterinin soyadını al
+                musteri = musteri_ad + " " + musteri_soyad # Müşteriyi ad ve soyad ile birleştir
+            else: # Eğer sorgu sonucu yoksa
+                musteri = "" # Müşteriyi boş yap
+            cur.execute("SELECT ad, fiyat FROM yemekler WHERE id = ?", (yemek_id,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                yemek_ad = row[0] # Yemeğin adını al
+                yemek_fiyat = row[1] # Yemeğin fiyatını al
+                yemek = yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)" # Yemeği ad ve fiyat ile birleştir
+            else: # Eğer sorgu sonucu yoksa
+                yemek = "" # Yemeği boş yap
+            
+            item_musteri = QTableWidgetItem(musteri) # Müşteri hücresi oluştur
+            item_yemek = QTableWidgetItem(yemek) # Yemek hücresi oluştur
+            combo_durum = QComboBox() # Durum seçim kutusu oluştur
+            combo_durum.addItems(["Bekliyor", "Hazırlanıyor", "Yolda", "Teslim Edildi"]) # Durum seçim kutusuna seçenekleri ekle
+            combo_durum.setCurrentText(durum) # Durum seçim kutusunu siparişin durumuna göre ayarla
+            button_guncelle = QPushButton("Güncelle") # Güncelle butonu oluştur
+            button_guncelle.clicked.connect(lambda checked, id=id, combo=combo_durum: self.siparis_guncelle(id, combo)) # Güncelle butonuna tıklandığında siparis_guncelle fonksiyonunu çağır (id ve combo parametreleri ile)
+            item_musteri.setTextAlignment(Qt.AlignCenter) # Müşteri hücresini ortala
+            item_yemek.setTextAlignment(Qt.AlignCenter) # Yemek hücresini ortala
+            button_guncelle.setStyleSheet("background-color: green; color: white") # Güncelle butonunun stilini ayarla
+            self.table_siparisler.setItem(i, 0, item_musteri) # Müşteri hücresini tabloya ekle
+            self.table_siparisler.setItem(i, 1, item_yemek) # Yemek hücresini tabloya ekle
+            self.table_siparisler.setCellWidget(i, 2, combo_durum) # Durum seçim kutusunu tabloya ekle
+            self.table_siparisler.setCellWidget(i, 3, button_guncelle) # Güncelle butonunu tabloya ekle
+        
+        self.table_siparisler.resizeColumnsToContents() # Tablonun sütun genişliklerini içeriğe göre ayarla
+        self.table_siparisler.move(50, 500)
+    
+    # Restoran sahibinin bilgilerini güncellemesini sağlayan fonksiyon
+    def bilgileri_guncelle(self):
+        
+        # Restoran sahibinin adını, adresini, telefonunu ve şifresini al
+        ad = self.edit_ad.text()
+        adres = self.edit_adres.text()
+        telefon = self.edit_telefon.text()
+        sifre = self.edit_sifre.text()
+        
+        # Veritabanında restoran sahibinin bilgilerini güncelle
+        cur.execute("UPDATE restoranlar SET ad = ?, adres = ?, telefon = ?, sifre = ? WHERE id = ?", (ad, adres, telefon, sifre, self.restoran_sahibi.id))
+        conn.commit()
+        
+        # Restoran sahibinin bilgilerini çek
+        self.restoran_sahibi.bilgileri_cek()
+        
+        # Bilgi labeli oluştur
+        bilgi_labeli = QLabel("Bilgileriniz güncellendi.", self)
+        bilgi_labeli.move(150, 450)
+        bilgi_labeli.show() # Bilgi labelini göster
+    
+    # Restoran sahibinin yemek silmesini sağlayan fonksiyon
+    def yemek_sil(self, id):
+        
+        # Veritabanından yemeği sil
+        self.restoran_sahibi.yemek_sil(id)
+        
+        # Restoran sahibinin yemeklerini çek
+        self.restoran_sahibi.yemekleri_cek()
+        
+        # Yemekler tablosunu güncelle
+        self.table_yemekler.setRowCount(len(self.restoran_sahibi.yemekler))
+        for i in range(len(self.restoran_sahibi.yemekler)):
+            yemek = self.restoran_sahibi.yemekler[i]
+            ad = yemek["ad"]
+            fiyat = yemek["fiyat"]
+            id = yemek["id"]
+            item_ad = QTableWidgetItem(ad)
+            item_fiyat = QTableWidgetItem(str(fiyat) + " YemekCoin")
+            button_sil = QPushButton("Sil")
+            button_sil.clicked.connect(lambda checked, id=id: self.yemek_sil(id))
+            item_ad.setTextAlignment(Qt.AlignCenter)
+            item_fiyat.setTextAlignment(Qt.AlignCenter)
+            button_sil.setStyleSheet("background-color: red; color: white")
+            self.table_yemekler.setItem(i, 0, item_ad)
+            self.table_yemekler.setItem(i, 1, item_fiyat)
+            self.table_yemekler.setCellWidget(i, 2, button_sil)
+    
+    # Restoran sahibinin yemek eklemesini sağlayan fonksiyon
+    def yemek_ekle(self):
+        
+        # Yeni yemeğin adını ve fiyatını al
+        ad = self.edit_yeni_ad.text()
+        fiyat = int(self.edit_yeni_fiyat.text())
+        
+        # Veritabanına yeni yemeği ekle
+        self.restoran_sahibi.yemek_ekle(ad, fiyat)
+        
+        # Restoran sahibinin yemeklerini çek
+        self.restoran_sahibi.yemekleri_cek()
+        
+        # Yemekler tablosunu güncelle
+        self.table_yemekler.setRowCount(len(self.restoran_sahibi.yemekler))
+        for i in range(len(self.restoran_sahibi.yemekler)):
+            yemek = self.restoran_sahibi.yemekler[i]
+            ad = yemek["ad"]
+            fiyat = yemek["fiyat"]
+            id = yemek["id"]
+            item_ad = QTableWidgetItem(ad)
+            item_fiyat = QTableWidgetItem(str(fiyat) + " YemekCoin")
+            button_sil = QPushButton("Sil")
+            button_sil.clicked.connect(lambda checked, id=id: self.yemek_sil(id))
+            item_ad.setTextAlignment(Qt.AlignCenter)
+            item_fiyat.setTextAlignment(Qt.AlignCenter)
+            button_sil.setStyleSheet("background-color: red; color: white")
+            self.table_yemekler.setItem(i, 0, item_ad)
+            self.table_yemekler.setItem(i, 1, item_fiyat)
+            self.table_yemekler.setCellWidget(i, 2, button_sil)
+    
+    # Restoran sahibinin sipariş durumunu güncellemesini sağlayan fonksiyon
+    def siparis_guncelle(self, id, combo):
+        
+        # Siparişin yeni durumunu al
+        durum = combo.currentText()
+        
+        # Veritabanında siparişin durumunu güncelle
+        self.restoran_sahibi.siparis_guncelle(id, durum)
+        
+        # Restoran sahibinin siparişlerini çek
+        self.restoran_sahibi.siparisleri_cek()
+        
+        # Siparişler tablosunu güncelle
+        self.table_siparisler.setRowCount(len(self.restoran_sahibi.siparisler))
+        for i in range(len(self.restoran_sahibi.siparisler)):
+            siparis = self.restoran_sahibi.siparisler[i]
+            musteri_id = siparis["musteri_id"]
+            yemek_id = siparis["yemek_id"]
+            durum = siparis["durum"]
+            id = siparis["id"]
+            cur.execute("SELECT ad, soyad FROM musteriler WHERE id = ?", (musteri_id,))
+            row = cur.fetchone()
+            if row:
+                musteri_ad = row[0]
+                musteri_soyad = row[1]
+                musteri = musteri_ad + " " + musteri_soyad
+            else:
+                musteri = ""
+            cur.execute("SELECT ad, fiyat FROM yemekler WHERE id = ?", (yemek_id,))
+            row = cur.fetchone()
+            if row:
+                yemek_ad = row[0]
+                yemek_fiyat = row[1]
+                yemek = yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)"
+            else:
+                yemek = ""
+            
+            item_musteri = QTableWidgetItem(musteri)
+            item_yemek = QTableWidgetItem(yemek)
+            combo_durum = QComboBox()
+            combo_durum.addItems(["Bekliyor", "Hazırlanıyor", "Yolda", "Teslim Edildi"])
+            combo_durum.setCurrentText(durum)
+            button_guncelle = QPushButton("Güncelle")
+            button_guncelle.clicked.connect(lambda checked, id=id, combo=combo_durum: self.siparis_guncelle(id, combo))
+            item_musteri.setTextAlignment(Qt.AlignCenter)
+            item_yemek.setTextAlignment(Qt.AlignCenter)
+            button_guncelle.setStyleSheet("background-color: green; color: white")
+            self.table_siparisler.setItem(i, 0, item_musteri)
+            self.table_siparisler.setItem(i, 1, item_yemek)
+            self.table_siparisler.setCellWidget(i, 2, combo_durum)
+            self.table_siparisler.setCellWidget(i, 3, button_guncelle)
+
+# Müşteri ekranı sınıfı tanımlama
+class MusteriEkrani(QWidget):
+    
+    # Müşteri ekranı nesnesi oluşturma
+    def __init__(self, musteri):
+        super().__init__()
+        
+        # Müşterinin bilgilerini al
+        self.musteri = musteri
+        
+        # Müşteri ekranının başlığını ve boyutunu ayarlama
+        self.setWindowTitle("Yemek Siparişi Uygulaması")
+        self.resize(800, 600)
+        
+        # Müşteri ekranındaki arayüz elemanlarını oluşturma ve yerleştirme
+        self.label_bilgilerim = QLabel("Bilgilerim", self)
+        self.label_bilgilerim.move(50, 50)
+        
+        self.label_ad = QLabel("Ad:", self)
+        self.label_ad.move(50, 100)
+        
+        self.edit_ad = QLineEdit(self)
+        self.edit_ad.setText(self.musteri.ad)
+        self.edit_ad.move(150, 100)
+        
+        self.label_soyad = QLabel("Soyad:", self)
+        self.label_soyad.move(50, 150)
+        
+        self.edit_soyad = QLineEdit(self)
+        self.edit_soyad.setText(self.musteri.soyad)
+        self.edit_soyad.move(150, 150)
+        
+        self.label_telefon = QLabel("Telefon:", self)
+        self.label_telefon.move(50, 200)
+        
+        self.edit_telefon = QLineEdit(self)
+        self.edit_telefon.setText(self.musteri.telefon)
+        self.edit_telefon.move(150, 200)
+        
+        self.label_email = QLabel("Email:", self)
+        self.label_email.move(50, 250)
+        
+        self.edit_email = QLineEdit(self)
+        self.edit_email.setText(self.musteri.email)
+        self.edit_email.setReadOnly(True) # Email değiştirilemez
+        self.edit_email.move(150, 250)
+        
+        self.label_sifre = QLabel("Şifre:", self)
+        self.label_sifre.move(50, 300)
+        
+        self.edit_sifre = QLineEdit(self)
+        self.edit_sifre.setText(self.musteri.sifre)
+        self.edit_sifre.setEchoMode(QLineEdit.Password)
+        self.edit_sifre.move(150, 300)
+        
+        self.label_bakiye = QLabel("Bakiye:", self)
+        self.label_bakiye.move(50, 350)
+        
+        self.edit_bakiye = QLineEdit(self)
+        self.edit_bakiye.setText(str(self.musteri.bakiye) + " YemekCoin")
+        self.edit_bakiye.setReadOnly(True) # Bakiye değiştirilemez
+        self.edit_bakiye.move(150, 350)
+        
+        self.button_guncelle = QPushButton("Bilgilerimi Güncelle", self)
+        self.button_guncelle.move(150, 400)
+        self.button_guncelle.clicked.connect(self.bilgileri_guncelle) # Bilgilerimi güncelle butonuna tıklandığında bilgileri_guncelle fonksiyonunu çağır
+        
+        # Restoranlar ve yemekler için boş listeler oluştur
+        # Bu listelerde veritabanından çekilen restoran ve yemek bilgilerini tutacağız
+        # Bu sayede seçim kutularında gösterilen restoran ve yemek adları ile veritabanındaki id'leri eşleştirebileceğiz
+        # Örneğin restoranlar[0] veritabanındaki id'si 1 olan restoranın bilgilerini içerir
+        # Örneğin yemekler[0] veritabanındaki id'si 1 olan yemeğin bilgilerini içerir
+        # Bu şekilde seçim kutularında gösterilen indeksler ile veritabanındaki id'leri birbirine bağlamış oluruz
+        # Aksi takdirde seçim kutularında gösterilen sıra ile veritabanındaki id'ler arasında uyumsuzluk olabilir
+        self.restoranlar = [] # Restoranlar listesi
+        self.yemekler = [] # Yemekler listesi
+        
+        self.label_siparis_ver = QLabel("Sipariş Ver", self)
+        self.label_siparis_ver.move(450, 50)
+        
+        self.label_restoran = QLabel("Restoran:", self)
+        self.label_restoran.move(450, 100)
+        
+        self.combo_restoran = QComboBox(self) # Restoran seçim kutusu oluştur
+        cur.execute("SELECT * FROM restoranlar") # Veritabanından tüm restoranları çek
+        rows = cur.fetchall()
+        if rows: # Eğer sorgu sonucu varsa
+            for row in rows: # Her bir restoran için
+                restoran_id = row[0] # Restoran id'sini al
+                restoran_ad = row[1] # Restoran adını al
+                restoran = {"id": restoran_id, "ad": restoran_ad} # Restoran bilgilerini bir sözlük yap
+                self.restoranlar.append(restoran) # Restoran bilgilerini restoranlar listesine ekle
+                self.combo_restoran.addItem(restoran_ad) # Restoran adını seçim kutusuna ekle
+        
+        self.combo_restoran.move(550, 100)
+        self.combo_restoran.currentIndexChanged.connect(self.restoran_degisti) # Restoran seçim kutusunda değişiklik olduğunda restoran_degisti fonksiyonunu çağır
+        
+        self.label_yemek = QLabel("Yemek:", self)
+        self.label_yemek.move(450, 150)
+        
+        self.combo_yemek = QComboBox(self) # Yemek seçim kutusu oluştur
+        cur.execute("SELECT * FROM yemekler WHERE restoran_id = ?", (self.restoranlar[0]["id"],)) # Veritabanından ilk restorana ait yemekleri çek
+        rows = cur.fetchall()
+        if rows: # Eğer sorgu sonucu varsa
+            for row in rows: # Her bir yemek için
+                yemek_id = row[0] # Yemek id'sini al
+                yemek_ad = row[1] # Yemek adını al
+                yemek_fiyat = row[2] # Yemek fiyatını al
+                yemek = {"id": yemek_id, "ad": yemek_ad, "fiyat": yemek_fiyat} # Yemek bilgilerini bir sözlük yap
+                self.yemekler.append(yemek) # Yemek bilgilerini yemekler listesine ekle
+                self.combo_yemek.addItem(yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)") # Yemeğin adını ve fiyatını seçim kutusuna ekle
+        
+        self.combo_yemek.move(550, 150)
+        
+        self.button_siparis_ver = QPushButton("Sipariş Ver", self)
+        self.button_siparis_ver.move(550, 200)
+        self.button_siparis_ver.clicked.connect(self.siparis_ver) # Sipariş ver butonuna tıklandığında siparis_ver fonksiyonunu çağır
+        
+        self.label_siparislerim = QLabel("Siparişlerim", self)
+        self.label_siparislerim.move(50, 450)
+        
+        self.table_siparisler = QTableWidget(self) # Siparişler tablosu oluştur
+        self.table_siparisler.setRowCount(len(self.musteri.siparisler)) # Tablonun satır sayısını müşterinin sipariş sayısına eşitle
+        self.table_siparisler.setColumnCount(4) # Tablonun sütun sayısını 4 yap
+        self.table_siparisler.setHorizontalHeaderLabels(["Restoran", "Yemek", "Durum", "İptal"]) # Tablonun sütun başlıklarını belirle
+        self.table_siparisler.verticalHeader().setVisible(False) # Tablonun satır başlıklarını gizle
+        self.table_siparisler.setEditTriggers(QTableWidget.NoEditTriggers) # Tablonun hücreleri düzenlenemez yap
+        for i in range(len(self.musteri.siparisler)): # Müşterinin siparişleri için döngü oluştur
+            siparis = self.musteri.siparisler[i] # Siparişi al
+            restoran_id = siparis["restoran_id"] # Siparişin restoran id'sini al
+            yemek_id = siparis["yemek_id"] # Siparişin yemek id'sini al
+            durum = siparis["durum"] # Siparişin durumunu al
+            id = siparis["id"] # Siparişin id'sini al
+            cur.execute("SELECT ad FROM restoranlar WHERE id = ?", (restoran_id,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                restoran_ad = row[0] # Restoranın adını al
+            else: # Eğer sorgu sonucu yoksa
+                restoran_ad = "" # Restoran adını boş yap
+            cur.execute("SELECT ad, fiyat FROM yemekler WHERE id = ?", (yemek_id,))
+            row = cur.fetchone()
+            if row: # Eğer sorgu sonucu varsa
+                yemek_ad = row[0] # Yemeğin adını al
+                yemek_fiyat = row[1] # Yemeğin fiyatını al
+                yemek = yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)" # Yemeği ad ve fiyat ile birleştir
+            else: # Eğer sorgu sonucu yoksa
+                yemek = "" # Yemeği boş yap
+            
+            item_restoran = QTableWidgetItem(restoran_ad) # Restoran hücresi oluştur
+            item_yemek = QTableWidgetItem(yemek) # Yemek hücresi oluştur
+            item_durum = QTableWidgetItem(durum) # Durum hücresi oluştur
+            button_iptal = QPushButton("İptal") # İptal butonu oluştur
+            button_iptal.clicked.connect(lambda checked, id=id: self.siparis_iptal(id)) # İptal butonuna tıklandığında siparis_iptal fonksiyonunu çağır (id parametresi ile)
+            item_restoran.setTextAlignment(Qt.AlignCenter) # Restoran hücresini ortala
+            item_yemek.setTextAlignment(Qt.AlignCenter) # Yemek hücresini ortala
+            item_durum.setTextAlignment(Qt.AlignCenter) # Durum hücresini ortala
+            button_iptal.setStyleSheet("background-color: red; color: white") # İptal butonunun stilini ayarla
+            self.table_siparisler.setItem(i, 0, item_restoran) # Restoran hücresini tabloya ekle
+            self.table_siparisler.setItem(i, 1, item_yemek) # Yemek hücresini tabloya ekle
+            self.table_siparisler.setItem(i, 2, item_durum) # Durum hücresini tabloya ekle
+            self.table_siparisler.setCellWidget(i, 3, button_iptal) # İptal butonunu tabloya ekle
+        
+        self.table_siparisler.resizeColumnsToContents() # Tablonun sütun genişliklerini içeriğe göre ayarla
+        self.table_siparisler.move(50, 500)
+        show()
+    # Müşterinin bilgilerini güncellemesini sağlayan fonksiyon
+    def bilgileri_guncelle(self):
+        
+        # Müşterinin adını, soyadını, telefonunu ve şifresini al
+        ad = self.edit_ad.text()
+        soyad = self.edit_soyad.text()
+        telefon = self.edit_telefon.text()
+        sifre = self.edit_sifre.text()
+        
+        # Veritabanında müşterinin bilgilerini güncelle
+        cur.execute("UPDATE musteriler SET ad = ?, soyad = ?, telefon = ?, sifre = ? WHERE id = ?", (ad, soyad, telefon, sifre, self.musteri.id))
+        conn.commit()
+        
+        # Müşterinin bilgilerini çek
+        self.musteri.bilgileri_cek()
+        
+                # Bilgi labeli oluştur
+        bilgi_labeli = QLabel("Bilgileriniz güncellendi.", self)
+        bilgi_labeli.move(150, 450)
+        bilgi_labeli.show() # Bilgi labelini göster
+    
+    # Müşterinin restoran seçim kutusunda değişiklik yaptığında çalışacak fonksiyon
+    def restoran_degisti(self):
+        
+        # Seçilen restoranın indeksini al
+        index = self.combo_restoran.currentIndex()
+        
+        # Restoranlar listesinden seçilen restoranın id'sini al
+        restoran_id = self.restoranlar[index]["id"]
+        
+        # Veritabanından seçilen restorana ait yemekleri çek
+        cur.execute("SELECT * FROM yemekler WHERE restoran_id = ?", (restoran_id,))
+        rows = cur.fetchall()
+        
+        # Yemekler listesini ve yemek seçim kutusunu temizle
+        self.yemekler.clear()
+        self.combo_yemek.clear()
+        
+        if rows: # Eğer sorgu sonucu varsa
+            for row in rows: # Her bir yemek için
+                yemek_id = row[0] # Yemek id'sini al
+                yemek_ad = row[1] # Yemek adını al
+                yemek_fiyat = row[2] # Yemek fiyatını al
+                yemek = {"id": yemek_id, "ad": yemek_ad, "fiyat": yemek_fiyat} # Yemek bilgilerini bir sözlük yap
+                self.yemekler.append(yemek) # Yemek bilgilerini yemekler listesine ekle
+                self.combo_yemek.addItem(yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)") # Yemeğin adını ve fiyatını seçim kutusuna ekle
+    
+    # Müşterinin sipariş vermesini sağlayan fonksiyon
+    def siparis_ver(self):
+        
+        # Seçilen restoranın ve yemeğin indekslerini al
+        restoran_index = self.combo_restoran.currentIndex()
+        yemek_index = self.combo_yemek.currentIndex()
+        
+        # Restoranlar ve yemekler listelerinden seçilen restoranın ve yemeğin id'lerini al
+        restoran_id = self.restoranlar[restoran_index]["id"]
+        yemek_id = self.yemekler[yemek_index]["id"]
+        
+        # Veritabanına siparişi ekle
+        self.musteri.siparis_ver(restoran_id, yemek_id)
+        
+        # Müşterinin siparişlerini çek
+        self.musteri.siparisleri_cek()
+        
+        # Siparişler tablosunu güncelle
+        self.table_siparisler.setRowCount(len(self.musteri.siparisler))
+        for i in range(len(self.musteri.siparisler)):
+            siparis = self.musteri.siparisler[i]
+            restoran_id = siparis["restoran_id"]
+            yemek_id = siparis["yemek_id"]
+            durum = siparis["durum"]
+            id = siparis["id"]
+            cur.execute("SELECT ad FROM restoranlar WHERE id = ?", (restoran_id,))
+            row = cur.fetchone()
+            if row:
+                restoran_ad = row[0]
+            else:
+                restoran_ad = ""
+            cur.execute("SELECT ad, fiyat FROM yemekler WHERE id = ?", (yemek_id,))
+            row = cur.fetchone()
+            if row:
+                yemek_ad = row[0]
+                yemek_fiyat = row[1]
+                yemek = yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)"
+            else:
+                yemek = ""
+            
+            item_restoran = QTableWidgetItem(restoran_ad)
+            item_yemek = QTableWidgetItem(yemek)
+            item_durum = QTableWidgetItem(durum)
+            button_iptal = QPushButton("İptal")
+            button_iptal.clicked.connect(lambda checked, id=id: self.siparis_iptal(id))
+            item_restoran.setTextAlignment(Qt.AlignCenter)
+            item_yemek.setTextAlignment(Qt.AlignCenter)
+            item_durum.setTextAlignment(Qt.AlignCenter)
+            button_iptal.setStyleSheet("background-color: red; color: white")
+            self.table_siparisler.setItem(i, 0, item_restoran)
+            self.table_siparisler.setItem(i, 1, item_yemek)
+            self.table_siparisler.setItem(i, 2, item_durum)
+            self.table_siparisler.setCellWidget(i, 3, button_iptal)
+    
+    # Müşterinin sipariş iptal etmesini sağlayan fonksiyon
+    def siparis_iptal(self, id):
+        
+        # Veritabanından siparişi sil
+        self.musteri.siparis_iptal(id)
+        
+        # Müşterinin siparişlerini çek
+        self.musteri.siparisleri_cek()
+        
+        # Siparişler tablosunu güncelle
+        self.table_siparisler.setRowCount(len(self.musteri.siparisler))
+        for i in range(len(self.musteri.siparisler)):
+            siparis = self.musteri.siparisler[i]
+            restoran_id = siparis["restoran_id"]
+            yemek_id = siparis["yemek_id"]
+            durum = siparis["durum"]
+            id = siparis["id"]
+            cur.execute("SELECT ad FROM restoranlar WHERE id = ?", (restoran_id,))
+            row = cur.fetchone()
+            if row:
+                restoran_ad = row[0]
+            else:
+                restoran_ad = ""
+            cur.execute("SELECT ad, fiyat FROM yemekler WHERE id = ?", (yemek_id,))
+            row = cur.fetchone()
+            if row:
+                yemek_ad = row[0]
+                yemek_fiyat = row[1]
+                yemek = yemek_ad + " (" + str(yemek_fiyat) + " YemekCoin)"
+            else:
+                yemek = ""
+            
+            item_restoran = QTableWidgetItem(restoran_ad)
+            item_yemek = QTableWidgetItem(yemek)
+            item_durum = QTableWidgetItem(durum)
+            button_iptal = QPushButton("İptal")
+            button_iptal.clicked.connect(lambda checked, id=id: self.siparis_iptal(id))
+            item_restoran.setTextAlignment(Qt.AlignCenter)
+            item_yemek.setTextAlignment(Qt.AlignCenter)
+            item_durum.setTextAlignment(Qt.AlignCenter)
+            button_iptal.setStyleSheet("background-color: red; color: white")
+            self.table_siparisler.setItem(i, 0, item_restoran)
+            self.table_siparisler.setItem(i, 1, item_yemek)
+            self.table_siparisler.setItem(i, 2, item_durum)
+            self.table_siparisler.setCellWidget(i, 3, button_iptal)
+
+# Uygulama nesnesi oluştur
+app = QApplication(sys.argv)
+
+# Giriş ekranı nesnesi oluştur
+giris_ekrani = GirisEkrani()
+
+# Giriş ekranını göster
+giris_ekrani.show()
+
+# Uygulamayı çalıştır
+sys.exit(app.exec_())
+
